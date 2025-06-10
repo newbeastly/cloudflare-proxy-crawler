@@ -4,14 +4,22 @@ import time
 import threading
 import logging
 from queue import Queue
-from bs4 import BeautifulSoup
+import re  # 导入正则表达式模块
+import socket  # 导入socket模块
 from urllib.parse import urlparse
 import tkinter as tk
 from tkinter import ttk
 import webbrowser
 
 # 配置日志
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),  # 控制台输出
+        logging.FileHandler('crawler.log')  # 同时写入日志文件
+    ]
+)
 logger = logging.getLogger(__name__)
 
 # 配置文件路径
@@ -38,48 +46,46 @@ def get_cloudflare_ip_ranges():
     try:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
-        # 只保留纯IP地址行，过滤HTML内容
-        return [line.strip() for line in response.text.splitlines() if '.' in line]
+        # 新增HTML内容检测
+        if '<html' in response.text.lower():
+            logger.error("检测到HTML响应内容，可能遭遇反爬机制")
+            return []
+        # 严格过滤纯IP地址行
+        return [line.strip() for line in response.text.splitlines() 
+                if re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$', line.strip())]
     except requests.RequestException as e:
         logger.error(f"获取Cloudflare IP范围时出错: {e}")
         return []
 
 # 检查IP是否为Cloudflare反代
 def is_cloudflare_reverse_proxy(ip):
-    # 添加IP格式验证
-    if not ip or '/' in ip or '<' in ip or '>' in ip:
-        logger.warning(f"跳过无效IP: {ip}")
-        return False
-        
+    # 增强IP格式验证
+    try:
+        socket.inet_pton(socket.AF_INET, ip)  # IPv4验证
+    except socket.error:
+        try:
+            socket.inet_pton(socket.AF_INET6, ip)  # IPv6验证
+        except socket.error:
+            logger.debug(f"跳过无效IP格式: {ip}")
+            return False
+
     url = f"http://{ip}"
     try:
-        response = requests.get(url, timeout=5)  # 缩短超时时间
+        response = requests.get(url, timeout=3, allow_redirects=True)  # 缩短超时时间
         response.raise_for_status()
-        
-        # 检查响应头
+
+        # 优化检查逻辑
         headers = response.headers
         if 'Server' in headers and 'cloudflare' in headers['Server'].lower():
             return True
-        
-        # 检查HTML内容
-        soup = BeautifulSoup(response.text, 'html.parser')
-        if soup.find(text=lambda text: 'cloudflare' in str(text).lower()):
+
+        # 快速检查HTML内容
+        if response.text.find('cloudflare') != -1:
             return True
-        
-        # 检查JavaScript内容
-        for script in soup.find_all('script'):
-            if 'cloudflare' in script.text.lower():
-                return True
-        
-        # 检查重定向
-        if response.history:
-            for resp in response.history:
-                if 'cloudflare' in resp.headers.get('Server', '').lower():
-                    return True
-        
+
         return False
     except requests.RequestException as e:
-        logger.warning(f"检查IP {ip} 时出错: {e}")
+        logger.debug(f"检查IP {ip} 时出错: {e}")
         return False
 
 # 爬虫任务
@@ -110,15 +116,15 @@ def main():
     results = []
     lock = threading.Lock()
     
-    # 将所有IP添加到队列
-    for ip_range in ip_ranges:
-        for ip in ip_range.split('/'):
-            ip_queue.put(ip)
+    # 将所有有效IP添加到队列（直接添加原始IP）
+    for ip in ip_ranges:
+        ip_queue.put(ip)
     
     # 启动多线程
     threads = []
     for _ in range(config['num_threads']):
         thread = threading.Thread(target=crawl_task, args=(ip_queue, results, lock))
+        thread.daemon = True  # 设置守护线程，防止僵尸进程
         thread.start()
         threads.append(thread)
     
