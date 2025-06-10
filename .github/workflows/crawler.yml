@@ -1,0 +1,35 @@
+   name: Cloudflare Proxy Crawler
+
+   on:
+     schedule:
+       - cron: '0 0 * * *'  # 每天凌晨执行
+     workflow_dispatch:
+
+   jobs:
+     crawl:
+       runs-on: ubuntu-latest
+
+       steps:
+         - name: Checkout code
+           uses: actions/checkout@v2
+
+         - name: Set up Python
+           uses: actions/setup-python@v2
+           with:
+             python-version: '3.x'
+
+         - name: Install dependencies
+           run: |
+             pip install -r requirements.txt
+
+         - name: Run crawler
+           run: |
+             python main.py
+
+         - name: Commit and push changes
+           run: |
+             git config --local user.email "action@github.com"
+             git config --local user.name "GitHub Action"
+             git add valid_cloudflare_ips.json
+             git commit -m "Update valid Cloudflare IPs"
+             git push
