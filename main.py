@@ -38,16 +38,22 @@ def get_cloudflare_ip_ranges():
     try:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
-        return response.text.splitlines()
+        # 只保留纯IP地址行，过滤HTML内容
+        return [line.strip() for line in response.text.splitlines() if '.' in line]
     except requests.RequestException as e:
         logger.error(f"获取Cloudflare IP范围时出错: {e}")
         return []
 
 # 检查IP是否为Cloudflare反代
 def is_cloudflare_reverse_proxy(ip):
+    # 添加IP格式验证
+    if not ip or '/' in ip or '<' in ip or '>' in ip:
+        logger.warning(f"跳过无效IP: {ip}")
+        return False
+        
     url = f"http://{ip}"
     try:
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, timeout=5)  # 缩短超时时间
         response.raise_for_status()
         
         # 检查响应头
